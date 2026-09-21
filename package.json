@@ -1,0 +1,27 @@
+{
+  "name": "svietlik",
+  "version": "0.1.0",
+  "description": "Talk to BMW light modules over ENET. HSFZ/DoIP transport, UDS, and a light-show engine.",
+  "license": "MIT",
+  "author": "Egzey",
+  "type": "module",
+  "engines": { "node": ">=22.6" },
+  "exports": {
+    ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
+    "./node": { "types": "./dist/src/node.d.ts", "default": "./dist/src/node.js" }
+  },
+  "bin": { "svietlik": "./dist/cli/svietlik.js" },
+  "files": ["dist", "PROTOCOL.md"],
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --test \"test/*.test.ts\"",
+    "cli": "node cli/svietlik.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["bmw", "enet", "hsfz", "doip", "uds", "obd", "lightshow"],
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  }
+}

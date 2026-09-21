@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tgz
+.env*
+
+# BMW ECU description files are copyrighted, keep them out
+*.prg
+*.grp
+*.PRG
+*.GRP
+
+# scan reports contain the VIN
+report*.json
