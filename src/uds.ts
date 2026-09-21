@@ -1,4 +1,4 @@
-import { concat, u16 } from './bytes.ts';
+import { concat, hex, u16 } from './bytes.ts';
 
 export const SID = {
   session: 0x10,
@@ -71,6 +71,9 @@ function echoLength(sid: number): number {
   if (sid === SID.session || sid === SID.testerPresent || sid === SID.readDtc) return 1;
   return 0;
 }
+
+/** The part of a request a positive reply echoes. Two requests with the same signature have indistinguishable answers. */
+export const signature = (req: Uint8Array) => hex(req.subarray(0, 1 + echoLength(req[0])));
 
 /**
  * Is `res` the answer to `req`? The gateway multiplexes several ECUs over one

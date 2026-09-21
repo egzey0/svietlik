@@ -1,5 +1,5 @@
 import { concat, hex } from '../bytes.ts';
-import { answers, isPending, parseReply, testerPresent, type UdsReply } from '../uds.ts';
+import { answers, isPending, parseReply, signature, testerPresent, type UdsReply } from '../uds.ts';
 import { hsfz, type Framing, type Incoming } from './framing.ts';
 import type { ByteSocket } from './socket.ts';
 
@@ -44,8 +44,10 @@ export class Client implements UdsLink {
   private keepAlive: ReturnType<typeof setInterval> | null = null;
   private activation: { resolve: () => void; reject: (e: Error) => void } | null = null;
   private state: 'new' | 'open' | 'dead' = 'new';
-  // ecu:sid pairs that timed out. A reply may still be in flight and would be
-  // indistinguishable from the answer to a retry, so we refuse the retry.
+  // Requests that timed out. The reply may still be in flight and would look
+  // exactly like the answer to a retry, so the same request is refused until
+  // reconnect. Keyed on what a reply echoes, so a timed out "start routine"
+  // does not block the "stop routine" that cleans up after it.
   private stale = new Set<string>();
   private readonly socket: ByteSocket;
   private readonly opts: ClientOptions;
@@ -96,7 +98,7 @@ export class Client implements UdsLink {
     if (every > 0) {
       this.keepAlive = setInterval(() => {
         if (this.current) return;
-        this.send(this.framing.wrap(0x10, testerPresent()));
+        this.send(this.framing.frame(this.framing.tester, 0x10, testerPresent()));
       }, every);
     }
   }
@@ -122,8 +124,8 @@ export class Client implements UdsLink {
     const job = this.queue.shift();
     if (!job) return;
 
-    if (this.stale.has(`${job.ecu}:${job.uds[0]}`)) {
-      job.reject(new Error(`ecu 0x${job.ecu.toString(16)} timed out earlier, reconnect before retrying`));
+    if (this.stale.has(`${job.ecu}:${signature(job.uds)}`)) {
+      job.reject(new Error(`ecu 0x${job.ecu.toString(16)} timed out on this request earlier, reconnect before retrying`));
       queueMicrotask(() => this.next());
       return;
     }
@@ -131,14 +133,14 @@ export class Client implements UdsLink {
     job.giveUpAt = Date.now() + (this.opts.maxPendingMs ?? 30000);
     this.arm(job);
     this.opts.trace?.(`> ${job.ecu.toString(16)} ${hex(job.uds)}`);
-    this.send(this.framing.wrap(job.ecu, job.uds));
+    this.send(this.framing.frame(this.framing.tester, job.ecu, job.uds));
   }
 
   private arm(job: Job): void {
     if (this.timer) clearTimeout(this.timer);
     const ms = Math.max(0, Math.min(job.timeoutMs, job.giveUpAt - Date.now()));
     this.timer = setTimeout(() => {
-      this.stale.add(`${job.ecu}:${job.uds[0]}`);
+      this.stale.add(`${job.ecu}:${signature(job.uds)}`);
       this.finish(() => job.reject(new Error(`timeout waiting for ecu 0x${job.ecu.toString(16)}`)));
     }, ms);
   }

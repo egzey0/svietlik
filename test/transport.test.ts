@@ -3,11 +3,11 @@ import { test } from 'node:test';
 import { fromHex, hex } from '../src/bytes.ts';
 import { Client } from '../src/transport/client.ts';
 import { doip, hsfz } from '../src/transport/framing.ts';
-import { readDid } from '../src/uds.ts';
+import { readDid, startRoutine, stopRoutine } from '../src/uds.ts';
 import { FakeCar } from './fakeCar.ts';
 
 test('hsfz wraps a request with tester and ecu address', () => {
-  assert.equal(hex(hsfz.wrap(0x40, fromHex('22 f1 90'))), '00 00 00 05 00 01 f4 40 22 f1 90');
+  assert.equal(hex(hsfz.frame(hsfz.tester, 0x40, fromHex('22 f1 90'))), '00 00 00 05 00 01 f4 40 22 f1 90');
 });
 
 test('hsfz waits for the whole frame', () => {
@@ -82,6 +82,15 @@ test('a timed out ecu is not retried on the same connection', async () => {
   const client = await openClient(new FakeCar(() => null));
   await assert.rejects(client.request(0x55, readDid(0xf190), 20), /timeout/);
   await assert.rejects(client.request(0x55, readDid(0xf190), 20), /reconnect/);
+  client.close();
+});
+
+test('a timed out start does not block the stop that cleans up after it', async () => {
+  const car = new FakeCar((_, uds) => (uds[1] === 0x01 ? null : [0x71, 0x02, 0x30, 0x00]));
+  const client = await openClient(car);
+  await assert.rejects(client.request(0x43, startRoutine(0x3000, [1, 2]), 20), /timeout/);
+  await assert.rejects(client.request(0x43, startRoutine(0x3000, [3, 4]), 20), /reconnect/);
+  assert.equal((await client.request(0x43, stopRoutine(0x3000))).ok, true);
   client.close();
 });
 
