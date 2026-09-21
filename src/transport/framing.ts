@@ -19,7 +19,7 @@ export interface Framing {
   /** sent right after TCP connect, null if the protocol has no handshake */
   hello(): Uint8Array | null;
   aliveReply(): Uint8Array | null;
-  wrap(ecu: number, uds: Uint8Array): Uint8Array;
+  frame(src: number, dst: number, uds: Uint8Array): Uint8Array;
   /** one message off the front of buf, or null when more bytes are needed */
   parse(buf: Uint8Array): { msg: Incoming; size: number } | null;
 }
@@ -46,8 +46,8 @@ export const hsfz: Framing = {
   maxEcu: 0xff,
   hello: () => null,
   aliveReply: () => null,
-  wrap(ecu, uds) {
-    return concat(u32(uds.length + 2), u16(0x01), [this.tester, ecu], uds);
+  frame(src, dst, uds) {
+    return concat(u32(uds.length + 2), u16(0x01), [src, dst], uds);
   },
   parse(buf) {
     if (buf.length < 6) return null;
@@ -100,8 +100,8 @@ export const doip: Framing = {
   aliveReply() {
     return doipMessage(DOIP.aliveResponse, u16(this.tester));
   },
-  wrap(ecu, uds) {
-    return doipMessage(DOIP.diag, concat(u16(this.tester), u16(ecu), uds));
+  frame(src, dst, uds) {
+    return doipMessage(DOIP.diag, concat(u16(src), u16(dst), uds));
   },
   parse(buf) {
     if (buf.length < 8) return null;

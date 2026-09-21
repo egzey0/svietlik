@@ -44,9 +44,7 @@ export class FakeCar implements ByteSocket {
 
   /** frame a reply the way the gateway would */
   reply(ecu: number, uds: number[]): Uint8Array {
-    const f = this.framing;
-    const swapped = { ...f, tester: ecu, wrap: f.wrap };
-    return swapped.wrap(f.tester, Uint8Array.from(uds));
+    return this.framing.frame(ecu, this.framing.tester, Uint8Array.from(uds));
   }
 
   push(bytes: Uint8Array) {

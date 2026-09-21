@@ -17,7 +17,7 @@ function gateway(): Promise<net.Server> {
       for (let parsed = hsfz.parse(rx); parsed; parsed = hsfz.parse(rx)) {
         rx = rx.subarray(parsed.size);
         if (parsed.msg.kind !== 'uds' || parsed.msg.uds[0] !== 0x22) continue;
-        const reply = { ...hsfz, tester: parsed.msg.dst }.wrap(hsfz.tester, Uint8Array.from([0x62, 0xf1, 0x90, ...ascii('WBA00000000000042')]));
+        const reply = hsfz.frame(parsed.msg.dst, parsed.msg.src, Uint8Array.from([0x62, 0xf1, 0x90, ...ascii('WBA00000000000042')]));
         for (const byte of reply) sock.write(Uint8Array.of(byte));
       }
     });
