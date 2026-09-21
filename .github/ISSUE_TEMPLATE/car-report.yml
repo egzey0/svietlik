@@ -1,0 +1,44 @@
+name: Car report
+description: You ran svietlik scan on your BMW. Tell us what it found.
+title: "car: <model> <year>"
+labels: [car-report]
+body:
+  - type: input
+    id: car
+    attributes:
+      label: Car
+      description: Chassis code, model, year. Facelift (LCI) or not.
+      placeholder: F30 330i 2016 LCI
+    validations:
+      required: true
+  - type: dropdown
+    id: headlights
+    attributes:
+      label: Headlights
+      options: [Halogen, Xenon, LED, Adaptive LED, Laser, Not sure]
+    validations:
+      required: true
+  - type: input
+    id: adapter
+    attributes:
+      label: Cable or adapter
+      placeholder: plain ENET cable / MHD Wi-Fi / ...
+  - type: textarea
+    id: report
+    attributes:
+      label: Report
+      description: Paste the JSON file that scan wrote. The serial part of the VIN is already masked unless you passed --keep-vin.
+      render: json
+    validations:
+      required: true
+  - type: dropdown
+    id: tried
+    attributes:
+      label: Did you try a light command?
+      description: Only relevant if scan said "fem shows yes" or "fle shows yes".
+      options: ["No, scan only", "Yes, it worked", "Yes, it did not work"]
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: What lit up, what did not, errors from --trace.

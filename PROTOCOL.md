@@ -155,6 +155,23 @@ reliably come back when the session ends. Write it back on (`... 22 01`) and
 then send `10 01`. For that reason the built in shows stay away from the REM
 and reach the rear through FEM lamp functions.
 
+## Finding out what a module knows without touching anything
+
+Useful on a car nobody has mapped. For each module that answers:
+
+```
+22 f1 97        name
+22 f1 50        SGBD index, tells you which ECU description file applies
+22 d5 42        does it know the lamp function DID
+22 45 01        does it know the lamp output DID
+31 03 30 00     routine results for 3000, does it know the LED routine
+```
+
+None of these change state. NRC `31` means the identifier is unknown to the
+module, `11` that it does not implement the service. Any other answer,
+positive or not, means the identifier exists there. `svietlik scan` does
+exactly this and writes the raw answers to the report.
+
 ## Negative responses you will meet
 
 | NRC | Meaning here |

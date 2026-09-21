@@ -17,6 +17,12 @@ sits a player that turns a list of timed steps into a light show.
 No runtime dependencies. The core has no Node imports, so it bundles for React
 Native; you bring the TCP socket.
 
+## Does it work on my car?
+
+Plug in an ENET cable and ask. The scan only reads: module names, part
+numbers, and whether each module recognises the light commands. It does not
+switch anything on and changes nothing on the car.
+
 ```
 $ svietlik scan 169.254.92.38
   0x10  ZGW_01
@@ -24,26 +30,36 @@ $ svietlik scan 169.254.92.38
   0x43  FLE02_L
   0x44  FLE02_R
   0x72  REM_20
-vin       WBS...
+
+vin       WBS00000000******
 transport hsfz
 battery   12.4 V
-lighting  fem 0x40, fle 0x43/0x44, rem 0x72
+fem shows yes
+fle shows yes
 
-$ svietlik play 169.254.92.38 welcome
+wrote svietlik-report-1790000000000.json
 ```
 
-## What works on which car
+"yes" means the car has the modules svietlik has commands for. If it says no,
+the report file is the useful part: it lists what the car has instead, and
+[posting it](https://github.com/egzey0/svietlik/issues/new?template=car-report.yml)
+is how that car gets supported. The serial half of the VIN is masked in the
+file. A module that reacts to one of the light commands with anything other
+than "never heard of it" gets a `<- knows ...` note next to its name, which is
+the first thing to look for on an unmapped car. `--full` walks all 254 addresses instead of the known six and takes a
+few minutes; use it on anything that is not an F3x/F8x.
 
 | Car | State |
 | --- | --- |
 | F-series with FEM_20, FLE02 LED headlights, REM_20 (tested on an F82 M4 LCI) | Everything in this repo |
-| Other F-series reporting the same module names | Should work, the commands are per module and not per model. Not tested |
-| F-series with halogen or xenon headlights | `fem` shows only, there is no FLE to dim |
-| G-series (BDC instead of FEM) | Connects over DoIP, reads VIN and module names. No light commands, the BDC map is not known yet |
+| Other F-series reporting the same module names | Should work, the commands are per module and not per model. Reports wanted |
+| F-series with halogen or xenon headlights | `fem` shows only, there is no FLE to dim. Reports wanted |
+| G-series (BDC instead of FEM) | Connects over DoIP, scan works. No light commands, the BDC map is not known yet |
 | E-series | Nothing, different protocol (K-line / D-CAN) |
 
-A module is driven only if it reports the expected name. A BDC answers at the
-same address as a FEM, so the address alone proves nothing.
+[cars/](cars/README.md) keeps the list of what has been seen so far and what
+is wanted most. A module is driven only if it reports the expected name: a BDC
+answers at the same address as a FEM, so the address alone proves nothing.
 
 ## Install
 
@@ -68,7 +84,7 @@ out for Wi-Fi (the gateway is normally the adapter's own IP).
 
 ```
 svietlik find                       look for a car on the network
-svietlik scan <host> [--full]       VIN, module names, battery. Read-only
+svietlik scan <host> [--full]       what is this car, can its lights be driven. Read-only
 svietlik shows                      list built in shows
 svietlik preview <show>             play a show in the terminal, no car needed
 svietlik play <host> <show>         play it on the car, ctrl+c hands the lamps back
@@ -76,8 +92,8 @@ svietlik lamp <host> lowBeam 500    one lamp function for 500 ms
 svietlik raw <host> 40 "22 f1 90"   one UDS request, reads only unless --write
 ```
 
-`--trace` prints every request and reply. `--out report.json` on `scan` saves
-the result; the file contains your VIN, look before you share it.
+`--trace` prints every request and reply. `scan` always writes a report file,
+`--out` names it, `--keep-vin` leaves the VIN unmasked.
 
 ## Library
 
@@ -158,8 +174,9 @@ where the information comes from.
 
 ## Adding a car
 
-Run `svietlik scan <host> --full --out report.json` and open an issue with the
-module list (strip the VIN). For G-series the missing piece is the BDC's lamp
+Run `svietlik scan <host> --full` and open a
+[car report](https://github.com/egzey0/svietlik/issues/new?template=car-report.yml)
+with the file it wrote. For G-series the missing piece is the BDC's lamp
 control job; if you have worked it out, PROTOCOL.md is the place.
 
 ## Development
