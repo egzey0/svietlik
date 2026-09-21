@@ -15,6 +15,8 @@ export const DID = {
   ecuName: 0xf197,
   hwNumber: 0xf191,
   swVersion: 0xf189,
+  /** BMW specific: which ECU description file (SGBD) the module belongs to */
+  sgbdIndex: 0xf150,
   voltage: 0xdad6,
   /** FEM LEUCHTEN_FUNKTION: light a lamp function for a given time */
   lampFunction: 0xd542,

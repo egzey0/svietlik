@@ -1,4 +1,4 @@
-import { hex, readU16 } from '../bytes.ts';
+import { hex, readU16, u16 } from '../bytes.ts';
 import type { UdsLink } from '../transport/client.ts';
 import { describe, readDid, SID, testerPresent, type UdsReply } from '../uds.ts';
 import { DID, ECU, FLE_ROUTINE } from './tables.ts';
@@ -6,8 +6,10 @@ import { DID, ECU, FLE_ROUTINE } from './tables.ts';
 export interface Module {
   address: number;
   name: string | null;
-  hwNumber?: string;
-  swVersion?: string;
+  /** raw identification reads, DID in hex to reply bytes or "nrc xx" */
+  ids?: Record<string, string>;
+  /** how the module reacted to being asked about the light commands, see probeLights */
+  lights?: Record<string, string>;
 }
 
 /** Where the lighting modules of this particular car live. Missing key = not found. */
@@ -19,8 +21,10 @@ export interface Profile {
 }
 
 export interface Report {
+  schema: 1;
   createdAt: string;
   framing: string;
+  /** serial number masked unless asked otherwise */
   vin: string | null;
   modules: Module[];
   profile: Profile;
@@ -58,28 +62,56 @@ export async function readVoltage(link: UdsLink, ecu: number = ECU.fem): Promise
   }
 }
 
+/**
+ * Keeps manufacturer, model code, year and plant, hides the serial. Enough to
+ * tell which car a report is about without pointing at one particular car.
+ */
+export const maskVin = (vin: string) => vin.slice(0, 11) + '******';
+
 export interface ScanOptions {
   /** walk 0x01..0xfe instead of the known lighting addresses, takes minutes */
   full?: boolean;
+  /** also ask every module whether it knows the light commands (still read-only) */
+  lights?: boolean;
+  /** put the full VIN in the report */
+  keepVin?: boolean;
   signal?: AbortSignal;
   onModule?: (m: Module) => void;
 }
 
-/** Read-only. Pings addresses and reads identification DIDs, never writes. */
+const IDENT_DIDS = [DID.ecuName, DID.sgbdIndex, DID.hwNumber, DID.swVersion];
+
+async function ask(link: UdsLink, address: number, uds: Uint8Array, skip = 0): Promise<{ text: string; data: Uint8Array | null }> {
+  try {
+    const r = await link.request(address, uds, 600);
+    if (!r.ok) return { text: `nrc ${(r.nrc ?? 0).toString(16).padStart(2, '0')}`, data: null };
+    return { text: hex(r.data.subarray(skip)), data: r.data.subarray(skip) };
+  } catch {
+    return { text: 'no answer', data: null };
+  }
+}
+
+/**
+ * Asks a module about the three light commands without running any of them:
+ * a read of the two DIDs and a "routine results" query for the FLE routine.
+ * A module that has never heard of them answers requestOutOfRange (nrc 31),
+ * anything else is worth a closer look. Treat it as a hint, some DIDs are
+ * write-only and answer 31 to a read even though the write works.
+ */
+export async function probeLights(link: UdsLink, address: number): Promise<Record<string, string>> {
+  return {
+    lampFunction: (await ask(link, address, readDid(DID.lampFunction), 2)).text,
+    lampOutput: (await ask(link, address, readDid(DID.lampOutput), 2)).text,
+    ledRoutine: (await ask(link, address, Uint8Array.of(SID.routine, 0x03, ...u16(FLE_ROUTINE)), 3)).text,
+  };
+}
+
+/** Read-only. Pings addresses and reads identification DIDs, never writes or starts anything. */
 export async function scan(link: UdsLink, opts: ScanOptions = {}): Promise<Module[]> {
   const addresses = opts.full
     ? Array.from({ length: 0xfe }, (_, i) => i + 1)
     : [ECU.gateway, ECU.fem, ECU.fleLeft, ECU.fleRight, ECU.kombi, ECU.rem];
   const modules: Module[] = [];
-
-  const read = async (address: number, did: number) => {
-    try {
-      const r = await link.request(address, readDid(did), 600);
-      return r.ok ? r.data.subarray(2) : null;
-    } catch {
-      return null;
-    }
-  };
 
   for (const address of addresses) {
     opts.signal?.throwIfAborted();
@@ -89,15 +121,13 @@ export async function scan(link: UdsLink, opts: ScanOptions = {}): Promise<Modul
     } catch {
       continue;
     }
-    const name = await read(address, DID.ecuName);
-    const hw = await read(address, DID.hwNumber);
-    const sw = await read(address, DID.swVersion);
-    const module: Module = {
-      address,
-      name: name ? printable(name) || null : null,
-      hwNumber: hw ? hex(hw) : undefined,
-      swVersion: sw ? hex(sw) : undefined,
-    };
+    const module: Module = { address, name: null, ids: {} };
+    for (const did of IDENT_DIDS) {
+      const { text, data } = await ask(link, address, readDid(did), 2);
+      module.ids![did.toString(16)] = text;
+      if (did === DID.ecuName && data) module.name = printable(data) || null;
+    }
+    if (opts.lights) module.lights = await probeLights(link, address);
     modules.push(module);
     opts.onModule?.(module);
   }
@@ -124,9 +154,10 @@ export async function identify(link: UdsLink & { framing?: { name: string } }, o
   const vin = await readVin(link);
   const modules = await scan(link, opts);
   return {
+    schema: 1,
     createdAt: new Date().toISOString(),
     framing: link.framing?.name ?? 'unknown',
-    vin,
+    vin: vin && !opts.keepVin ? maskVin(vin) : vin,
     modules,
     profile: resolveProfile(modules),
   };

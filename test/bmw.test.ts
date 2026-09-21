@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { hex } from '../src/bytes.ts';
 import { femLamp, femOutput, femOutputRelease, fleLeds, fleStop, remOutput } from '../src/bmw/commands.ts';
-import { guard, identify, parseVin, resolveProfile } from '../src/bmw/identify.ts';
+import { guard, identify, maskVin, parseVin, resolveProfile } from '../src/bmw/identify.ts';
 import { FEM_OUTPUT, LAMP, REM_OUTPUT } from '../src/bmw/tables.ts';
 import { Client } from '../src/transport/client.ts';
 import { readDid, session, writeDid } from '../src/uds.ts';
@@ -63,7 +63,7 @@ test('identify only reads', async () => {
   const report = await identify(client);
   client.close();
 
-  assert.equal(report.vin, 'WBA00000000000042');
+  assert.equal(report.vin, 'WBA00000000******');
   assert.equal(report.framing, 'hsfz');
   assert.deepEqual(report.profile, { body: 0x40, left: 0x43, right: 0x44, rear: 0x72 });
   assert.deepEqual(
@@ -72,6 +72,35 @@ test('identify only reads', async () => {
   );
   const services = new Set(car.sent.map((line) => line.split(' ')[1]));
   assert.deepEqual([...services].sort(), ['22', '3e']);
+});
+
+test('an unmapped car still produces a useful report', async () => {
+  // G-series shaped: a BDC at 0x40 that knows neither light DID, nothing at the FLE addresses
+  const car = new FakeCar((ecu, uds) => {
+    if (ecu !== 0x10 && ecu !== 0x40) return null;
+    if (uds[0] === 0x3e) return [0x7e, 0x00];
+    if (uds[0] === 0x31) return [0x7f, 0x31, 0x31];
+    if (uds[1] === 0xf1 && uds[2] === 0x97) return [0x62, 0xf1, 0x97, ...ascii(ecu === 0x40 ? 'BDC_BODY' : 'ZGW_02')];
+    if (uds[1] === 0xf1 && uds[2] === 0x50) return [0x62, 0xf1, 0x50, 0x0f, 0x2b, 0x40];
+    return [0x7f, 0x22, 0x31];
+  });
+  const client = new Client(car, { keepAliveMs: 0 });
+  await client.connect('car');
+  const report = await identify(client, { lights: true, keepVin: true });
+  client.close();
+
+  assert.equal(report.vin, null);
+  assert.deepEqual(report.profile, { body: undefined, left: undefined, right: undefined, rear: undefined });
+  const bdc = report.modules.find((m) => m.address === 0x40)!;
+  assert.equal(bdc.name, 'BDC_BODY');
+  assert.equal(bdc.ids!.f150, '0f 2b 40');
+  assert.deepEqual(bdc.lights, { lampFunction: 'nrc 31', lampOutput: 'nrc 31', ledRoutine: 'nrc 31' });
+  // probing asks, it never writes or starts anything
+  for (const line of car.sent) assert.match(line, /: (22|3e|31 03) /);
+});
+
+test('masked vin keeps the model and hides the serial', () => {
+  assert.equal(maskVin('WBA00000000000042'), 'WBA00000000******');
 });
 
 test('guard lets known light commands through and nothing else', async () => {
