@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { fromHex, hex } from '../src/bytes.ts';
 import { femLamp } from '../src/bmw/commands.ts';
-import { guard, identify, readVoltage, send } from '../src/bmw/identify.ts';
+import { guard, identify, readVoltage, send, type Module } from '../src/bmw/identify.ts';
 import { LAMP } from '../src/bmw/tables.ts';
 import { connect, discover } from '../src/node.ts';
 import { driverFor } from '../src/show/drivers.ts';
@@ -12,11 +12,18 @@ import { SHOWS, findShow } from '../src/show/shows.ts';
 import { describe, SID } from '../src/uds.ts';
 import { HEIGHT, renderCar } from './render.ts';
 
+// modules that did not answer "never heard of it" to a light command are worth a look
+function lightHint(m: Module): string {
+  const known = Object.entries(m.lights ?? {}).filter(([, reply]) => reply !== 'nrc 31' && reply !== 'nrc 11' && reply !== 'no answer');
+  return known.length ? `<- knows ${known.map(([name]) => name).join(', ')}` : '';
+}
+
 const USAGE = `svietlik <command>
 
   find                         look for a car on the network (DoIP broadcast)
-  scan <host> [--full] [--out report.json]
-                               read VIN and module names, never writes
+  scan <host> [--full] [--out file] [--keep-vin]
+                               what is this car and can svietlik drive its lights.
+                               Read-only, writes a report you can share
   shows                        list built in shows
   preview <show>               play a show in the terminal, no car needed
   play <host> <show>           play a show on the car
@@ -32,6 +39,7 @@ const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     full: { type: 'boolean' },
+    'keep-vin': { type: 'boolean' },
     out: { type: 'string' },
     doip: { type: 'boolean' },
     trace: { type: 'boolean' },
@@ -73,20 +81,29 @@ const commands: Record<string, () => Promise<void>> = {
   async scan() {
     const client = await open(need(args[0], 'host'));
     try {
+      if (flags.full) console.log('walking every address, this takes a few minutes');
       const report = await identify(client, {
         full: flags.full,
-        onModule: (m) => console.log(`  0x${m.address.toString(16).padStart(2, '0')}  ${m.name ?? '?'}`),
+        lights: true,
+        keepVin: flags['keep-vin'],
+        onModule: (m) => console.log(`  0x${m.address.toString(16).padStart(2, '0')}  ${(m.name ?? '?').padEnd(12)} ${lightHint(m)}`.trimEnd()),
       });
-      console.log(`vin       ${report.vin ?? 'not readable'}`);
+      console.log(`
+vin       ${report.vin ?? 'not readable'}`);
       console.log(`transport ${report.framing}`);
-      const volts = report.profile.body !== undefined ? await readVoltage(client, report.profile.body) : null;
+      const { body, left, right } = report.profile;
+      const volts = body !== undefined ? await readVoltage(client, body) : null;
       if (volts) console.log(`battery   ${volts.toFixed(1)} V`);
-      const { body, left, right, rear } = report.profile;
-      const has = (a?: number) => (a === undefined ? 'no' : `0x${a.toString(16)}`);
-      console.log(`lighting  fem ${has(body)}, fle ${has(left)}/${has(right)}, rem ${has(rear)}`);
-      if (flags.out) {
-        await writeFile(flags.out, JSON.stringify(report, null, 2), { flag: 'wx' });
-        console.log(`wrote ${flags.out} (contains the VIN)`);
+      console.log(`fem shows ${body !== undefined ? 'yes' : 'no, no FEM_20 found'}`);
+      console.log(`fle shows ${left !== undefined && right !== undefined ? 'yes' : 'no, needs FLE02_L and FLE02_R'}`);
+
+      const out = flags.out ?? `svietlik-report-${Date.now()}.json`;
+      await writeFile(out, JSON.stringify(report, null, 2), { flag: 'wx' });
+      console.log(`
+wrote ${out}`);
+      if (body === undefined || left === undefined) {
+        console.log('This car is not mapped yet. The report is how it gets mapped:');
+        console.log('https://github.com/egzey0/svietlik/issues/new?template=car-report.yml');
       }
     } finally {
       client.close();
