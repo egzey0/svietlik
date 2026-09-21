@@ -35,7 +35,7 @@ export function remOutput(output: number, on: boolean): Uint8Array {
   return writeDid(DID.lampOutput, [output, on ? 1 : 0]);
 }
 
-// The FLE answers requestOutOfRange for anything above this.
+// Known good. 0xff comes back as requestOutOfRange, nobody has looked for the real limit.
 export const FLE_MAX_CURRENT = 0x32;
 
 /**
