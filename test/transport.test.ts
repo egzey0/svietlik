@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { fromHex, hex } from '../src/bytes.ts';
 import { Client } from '../src/transport/client.ts';
-import { doip, hsfz } from '../src/transport/framing.ts';
+import { doip, doipIdentRequest, hsfz, hsfzIdentRequest, isIdentReply } from '../src/transport/framing.ts';
 import { readDid, startRoutine, stopRoutine } from '../src/uds.ts';
 import { FakeCar } from './fakeCar.ts';
 
@@ -113,4 +113,18 @@ test('everything queued rejects when the socket drops', async () => {
   await assert.rejects(b, /socket closed/);
   await assert.rejects(client.request(0x40, readDid(3)), /not connected/);
   assert.equal(dropped, true);
+});
+
+test('identification requests', () => {
+  assert.equal(hex(hsfzIdentRequest()), '00 00 00 00 00 11');
+  assert.equal(hex(doipIdentRequest()), '02 fd 00 01 00 00 00 00');
+});
+
+test('identification replies from both generations, not our own requests', () => {
+  const ascii = (s: string) => [...s].map((c) => c.charCodeAt(0));
+  const hsfzReply = Uint8Array.from([0, 0, 0, 9, 0, 0x11, ...ascii('DIAGADR10')]);
+  assert.ok(isIdentReply(hsfzReply));
+  assert.ok(isIdentReply(fromHex('02 fd 00 04 00 00 00 21' + ' 00'.repeat(33))));
+  assert.ok(!isIdentReply(hsfzIdentRequest()));
+  assert.ok(!isIdentReply(doipIdentRequest()));
 });

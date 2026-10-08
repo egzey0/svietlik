@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import dgram from 'node:dgram';
 import net from 'node:net';
 import { test } from 'node:test';
 import { concat } from '../src/bytes.ts';
 import { readVin } from '../src/bmw/identify.ts';
-import { connect } from '../src/node.ts';
+import { connect, discover } from '../src/node.ts';
 import { hsfz } from '../src/transport/framing.ts';
 
 const ascii = (s: string) => [...s].map((c) => c.charCodeAt(0));
@@ -39,4 +40,17 @@ test('reads the vin over a real socket', async () => {
 
 test('connect reports every transport it tried', async () => {
   await assert.rejects(connect('127.0.0.1', { framing: { ...hsfz, port: 1 }, connectTimeoutMs: 500 }), /no answer from 127.0.0.1 \(hsfz: /);
+});
+
+test('discover finds an F-series gateway by its HSFZ identification reply', async () => {
+  const gateway = dgram.createSocket('udp4');
+  gateway.on('message', (msg, from) => {
+    if (msg[5] === 0x11) gateway.send(Buffer.from([0, 0, 0, 9, 0, 0x11, ...Buffer.from('DIAGADR10')]), from.port, from.address);
+  });
+  await new Promise<void>((resolve) => gateway.bind(6811, '127.0.0.1', resolve));
+  try {
+    assert.deepEqual(await discover(600, ['127.0.0.1']), ['127.0.0.1']);
+  } finally {
+    gateway.close();
+  }
 });

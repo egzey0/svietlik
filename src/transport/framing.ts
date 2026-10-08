@@ -88,6 +88,17 @@ function doipMessage(type: number, payload: ArrayLike<number>): Uint8Array {
 
 export const doipIdentRequest = () => doipMessage(DOIP.identRequest, []);
 
+// F-series gateways do not answer DoIP; they have their own identification
+// request on UDP 6811, an empty HSFZ frame with control word 0x11.
+export const HSFZ_IDENT_PORT = 6811;
+export const hsfzIdentRequest = () => concat(u32(0), u16(0x11));
+
+/** true for a gateway answering either identification request */
+export function isIdentReply(msg: Uint8Array): boolean {
+  if (msg.length >= 8 && (msg[0] ^ 0xff) === msg[1]) return readU16(msg, 2) === 0x0004;
+  return msg.length > 6 && readU16(msg, 4) === 0x11;
+}
+
 export const doip: Framing = {
   name: 'doip',
   port: 13400,

@@ -1,7 +1,8 @@
 import dgram from 'node:dgram';
 import net from 'node:net';
+import os from 'node:os';
 import { Client, type ClientOptions } from './transport/client.ts';
-import { doip, doipIdentRequest, hsfz, type Framing } from './transport/framing.ts';
+import { doip, doipIdentRequest, hsfz, hsfzIdentRequest, HSFZ_IDENT_PORT, isIdentReply, type Framing } from './transport/framing.ts';
 import type { ByteSocket } from './transport/socket.ts';
 
 export class NodeSocket implements ByteSocket {
@@ -60,11 +61,29 @@ export async function connect(host: string, opts: ClientOptions & { prefer?: Fra
 }
 
 /**
- * Broadcast a DoIP vehicle identification request and collect whoever answers.
- * ENET Wi-Fi adapters hand out their own subnet, so this is how you find the
- * gateway without asking the user for an IP.
+ * The broadcast address of every IPv4 interface, plus the global and link-local
+ * ones. 255.255.255.255 leaves through one interface only, usually not the one
+ * the car is on when the laptop also has Wi-Fi or a second adapter.
  */
-export function discover(timeoutMs = 2500, broadcast = ['255.255.255.255', '169.254.255.255']): Promise<string[]> {
+export function broadcastAddresses(): string[] {
+  const out = new Set(['255.255.255.255', '169.254.255.255']);
+  for (const list of Object.values(os.networkInterfaces())) {
+    for (const a of list ?? []) {
+      if (a.family !== 'IPv4' || a.internal) continue;
+      const mask = a.netmask.split('.').map(Number);
+      out.add(a.address.split('.').map((b, i) => Number(b) | (~mask[i] & 0xff)).join('.'));
+    }
+  }
+  return [...out];
+}
+
+/**
+ * Ask every network the machine is on for a BMW gateway and collect whoever
+ * answers. Sends both the HSFZ identification (F-series, UDP 6811) and the
+ * DoIP one (G-series, UDP 13400), so it works the same over a cable and over
+ * an ENET Wi-Fi adapter without the user knowing an IP.
+ */
+export function discover(timeoutMs = 2500, broadcast = broadcastAddresses()): Promise<string[]> {
   return new Promise((resolve) => {
     const found = new Set<string>();
     const sock = dgram.createSocket('udp4');
@@ -80,12 +99,17 @@ export function discover(timeoutMs = 2500, broadcast = ['255.255.255.255', '169.
 
     sock.on('error', done);
     sock.on('message', (msg, from) => {
-      if (msg.length >= 8 && (msg[0] ^ 0xff) === msg[1]) found.add(from.address);
+      if (isIdentReply(msg)) found.add(from.address);
     });
     sock.bind(0, () => {
       sock.setBroadcast(true);
-      const req = doipIdentRequest();
-      const shout = () => broadcast.forEach((addr) => sock.send(req, doip.port, addr, () => {}));
+      const requests: [Uint8Array, number][] = [
+        [hsfzIdentRequest(), HSFZ_IDENT_PORT],
+        [doipIdentRequest(), doip.port],
+      ];
+      const shout = () => {
+        for (const addr of broadcast) for (const [req, port] of requests) sock.send(req, port, addr, () => {});
+      };
       // single datagrams get lost on these adapters, repeat a few times
       shout();
       for (const at of [400, 1000, 1800]) if (at < timeoutMs) timers.push(setTimeout(shout, at));
