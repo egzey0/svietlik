@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline/promises';
+import { isSea } from 'node:sea';
 import { parseArgs } from 'node:util';
 import { fromHex, hex } from '../src/bytes.ts';
 import { femLamp } from '../src/bmw/commands.ts';
@@ -11,6 +14,7 @@ import { Player } from '../src/show/player.ts';
 import { SHOWS, findShow } from '../src/show/shows.ts';
 import { describe, SID } from '../src/uds.ts';
 import { HEIGHT, renderCar } from './render.ts';
+import { copyText, openUrl, REPORT_FORM, reportUrl } from './share.ts';
 
 // modules that did not answer "never heard of it" to a light command are worth a look
 function lightHint(m: Module): string {
@@ -20,10 +24,14 @@ function lightHint(m: Module): string {
 
 const USAGE = `svietlik <command>
 
-  find                         look for a car on the network (DoIP broadcast)
-  scan <host> [--full] [--out file] [--keep-vin]
+  start                        guided scan: waits for the car, scans it and opens
+                               the report form. What the downloaded app runs
+  find                         look for a car on the network, cable or Wi-Fi
+  scan [host] [--full] [--out file] [--keep-vin]
                                what is this car and can svietlik drive its lights.
-                               Read-only, writes a report you can share
+                               Read-only, writes a report you can share. Without a
+                               host it uses the first car find sees
+  send <report.json>           open the car report form with this report filled in
   shows                        list built in shows
   preview <show>               play a show in the terminal, no car needed
   play <host> <show>           play a show on the car
@@ -34,6 +42,23 @@ const USAGE = `svietlik <command>
   --doip     try DoIP before HSFZ
   --trace    print every frame
   --speed n  playback speed, 0.25 to 4`;
+
+const NOT_FOUND = `Check that:
+  - the ignition is on (the engine can stay off)
+  - with a cable: it is in the OBD port and in this computer's network port.
+    Windows can take up to a minute to give the cable an address
+  - with Wi-Fi: this computer is connected to the adapter's own network
+  - the adapter is ENET. ELM327, OBDLink and K+DCAN adapters do not speak it`;
+
+const INTRO = `svietlik scan
+
+Finds out which light modules your BMW has. It only reads, nothing on the car
+changes. Takes about a minute.
+
+  1. Ignition on, the engine can stay off.
+  2. Either an ENET cable from the OBD port to this computer's network port,
+     or this computer connected to your ENET Wi-Fi adapter's network.
+`;
 
 const { values: flags, positionals } = parseArgs({
   allowPositionals: true,
@@ -48,11 +73,20 @@ const { values: flags, positionals } = parseArgs({
     help: { type: 'boolean', short: 'h' },
   },
 });
-const [command, ...args] = positionals;
+
+// a double clicked download has no arguments and a console window that closes
+// the moment we exit
+const guided = isSea() && process.argv.length <= 2;
+const [command, ...args] = guided ? ['start'] : positionals;
 
 function need(value: string | undefined, what: string): string {
   if (!value) throw new Error(`missing ${what}\n\n${USAGE}`);
   return value;
+}
+
+function ask(question: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return rl.question(question).finally(() => rl.close());
 }
 
 const open = (host: string) =>
@@ -72,42 +106,110 @@ function makePlayer(opts: ConstructorParameters<typeof Player>[0]) {
   return player;
 }
 
+const reportName = () => `svietlik-report-${Date.now()}.json`;
+
+// next to the downloaded app, where people look for it. Double clicking on a
+// Mac starts in the home folder
+const reportDir = () => (isSea() ? dirname(process.execPath) : process.cwd());
+
+async function findOne(): Promise<string> {
+  const hosts = await discover();
+  if (!hosts.length) throw new Error(`no car found on the network\n\n${NOT_FOUND}`);
+  if (hosts.length > 1) console.log(`several gateways answered (${hosts.join(', ')}), using ${hosts[0]}`);
+  return hosts[0];
+}
+
+async function waitForCar(): Promise<string> {
+  process.stdout.write('looking for the car (ctrl+c to quit) ');
+  const started = Date.now();
+  let hinted = false;
+  for (;;) {
+    const [host] = await discover();
+    if (host) {
+      process.stdout.write('\n');
+      return host;
+    }
+    process.stdout.write('.');
+    if (!hinted && Date.now() - started > 20_000) {
+      hinted = true;
+      process.stdout.write(`\n\nstill nothing. ${NOT_FOUND}\n\nstill looking `);
+    }
+  }
+}
+
+async function scanCar(host: string, out: string) {
+  const client = await open(host);
+  try {
+    if (flags.full) console.log('walking every address, this takes a few minutes');
+    const report = await identify(client, {
+      full: flags.full,
+      lights: true,
+      keepVin: flags['keep-vin'],
+      onModule: (m) => console.log(`  0x${m.address.toString(16).padStart(2, '0')}  ${(m.name ?? '?').padEnd(12)} ${lightHint(m)}`.trimEnd()),
+    });
+    console.log(`
+vin       ${report.vin ?? 'not readable'}`);
+    console.log(`transport ${report.framing}`);
+    const { body, left, right } = report.profile;
+    const volts = body !== undefined ? await readVoltage(client, body) : null;
+    if (volts) console.log(`battery   ${volts.toFixed(1)} V`);
+    console.log(`fem shows ${body !== undefined ? 'yes' : 'no, no FEM_20 found'}`);
+    console.log(`fle shows ${left !== undefined && right !== undefined ? 'yes' : 'no, needs FLE02_L and FLE02_R'}`);
+
+    const json = JSON.stringify(report, null, 2);
+    await writeFile(out, json, { flag: 'wx' });
+    console.log(`
+wrote ${out}`);
+    return { json, file: out, supported: body !== undefined };
+  } finally {
+    client.close();
+  }
+}
+
+async function share(json: string, car?: string) {
+  const { url, withReport } = reportUrl(json, car);
+  const copied = await copyText(json);
+  const opened = await openUrl(url);
+  console.log(opened ? '\nThe report form is open in your browser.' : `\nOpen this in a browser:\n${url}`);
+  if (withReport) console.log('The report is already filled in. Pick the headlight type and press Create.');
+  else if (copied) console.log('The report is in your clipboard, paste it into the Report box.');
+  else console.log('Paste the contents of the report file into the Report box.');
+  console.log(`Posting needs a free GitHub account. The form: ${REPORT_FORM}`);
+}
+
 const commands: Record<string, () => Promise<void>> = {
+  async start() {
+    console.log(INTRO);
+    const host = await waitForCar();
+    console.log(`found a car at ${host}\n`);
+    const scanned = await scanCar(host, join(reportDir(), reportName()));
+    console.log(
+      scanned.supported
+        ? '\nsvietlik can drive the lights on this car. Sending the report still helps, it puts the car on the list.'
+        : '\nThis car is not mapped yet. Your report is what is needed to add it.',
+    );
+    if (!process.stdin.isTTY) return;
+
+    const car = (await ask('\nWhich car is it? Chassis, model, year, e.g. "F30 330i 2016 LCI": ')).trim();
+    await ask('If the Wi-Fi adapter took your internet, switch back to your normal network now.\nPress Enter to open the report form...');
+    await share(scanned.json, car || undefined);
+  },
+
   async find() {
     const hosts = await discover();
-    console.log(hosts.length ? hosts.join('\n') : 'nothing answered');
+    console.log(hosts.length ? hosts.join('\n') : `nothing answered\n\n${NOT_FOUND}`);
   },
 
   async scan() {
-    const client = await open(need(args[0], 'host'));
-    try {
-      if (flags.full) console.log('walking every address, this takes a few minutes');
-      const report = await identify(client, {
-        full: flags.full,
-        lights: true,
-        keepVin: flags['keep-vin'],
-        onModule: (m) => console.log(`  0x${m.address.toString(16).padStart(2, '0')}  ${(m.name ?? '?').padEnd(12)} ${lightHint(m)}`.trimEnd()),
-      });
-      console.log(`
-vin       ${report.vin ?? 'not readable'}`);
-      console.log(`transport ${report.framing}`);
-      const { body, left, right } = report.profile;
-      const volts = body !== undefined ? await readVoltage(client, body) : null;
-      if (volts) console.log(`battery   ${volts.toFixed(1)} V`);
-      console.log(`fem shows ${body !== undefined ? 'yes' : 'no, no FEM_20 found'}`);
-      console.log(`fle shows ${left !== undefined && right !== undefined ? 'yes' : 'no, needs FLE02_L and FLE02_R'}`);
-
-      const out = flags.out ?? `svietlik-report-${Date.now()}.json`;
-      await writeFile(out, JSON.stringify(report, null, 2), { flag: 'wx' });
-      console.log(`
-wrote ${out}`);
-      if (body === undefined || left === undefined) {
-        console.log('This car is not mapped yet. The report is how it gets mapped:');
-        console.log('https://github.com/egzey0/svietlik/issues/new?template=car-report.yml');
-      }
-    } finally {
-      client.close();
+    const scanned = await scanCar(args[0] ?? (await findOne()), flags.out ?? reportName());
+    if (!scanned.supported) {
+      console.log('This car is not mapped yet. The report is how it gets mapped:');
+      console.log(`svietlik send ${scanned.file}`);
     }
+  },
+
+  async send() {
+    await share(await readFile(need(args[0], 'report file'), 'utf8'));
   },
 
   async shows() {
@@ -184,7 +286,12 @@ if (!run) {
   console.log(USAGE);
   process.exit(command && !flags.help ? 1 : 0);
 }
-run().catch((e: Error) => {
-  console.error(e.message);
-  process.exit(1);
-});
+run()
+  .catch((e: Error) => {
+    console.error(`\n${e.message}`);
+    process.exitCode = 1;
+  })
+  .then(async () => {
+    if (guided && process.stdin.isTTY) await ask('\nPress Enter to close');
+    process.exit();
+  });

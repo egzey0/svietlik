@@ -5,23 +5,47 @@
   "license": "MIT",
   "author": "Egzey",
   "type": "module",
-  "engines": { "node": ">=22.6" },
-  "exports": {
-    ".": { "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
-    "./node": { "types": "./dist/src/node.d.ts", "default": "./dist/src/node.js" }
+  "engines": {
+    "node": ">=22.6"
   },
-  "bin": { "svietlik": "./dist/cli/svietlik.js" },
-  "files": ["dist", "PROTOCOL.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./node": {
+      "types": "./dist/src/node.d.ts",
+      "default": "./dist/src/node.js"
+    }
+  },
+  "bin": {
+    "svietlik": "./dist/cli/svietlik.js"
+  },
+  "files": [
+    "dist",
+    "PROTOCOL.md"
+  ],
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
     "test": "node --test \"test/*.test.ts\"",
     "cli": "node cli/svietlik.ts",
+    "app": "node scripts/sea.mjs build/svietlik",
     "prepublishOnly": "npm run build"
   },
-  "keywords": ["bmw", "enet", "hsfz", "doip", "uds", "obd", "lightshow"],
+  "keywords": [
+    "bmw",
+    "enet",
+    "hsfz",
+    "doip",
+    "uds",
+    "obd",
+    "lightshow"
+  ],
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6",
     "typescript": "^5.9.0"
   }
 }

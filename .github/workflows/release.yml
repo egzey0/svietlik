@@ -1,0 +1,71 @@
+name: release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+          - os: macos-latest
+          - os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: npm test
+
+      - name: windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          node scripts/sea.mjs dist-app/svietlik-windows-x64.exe
+          ./dist-app/svietlik-windows-x64.exe shows > /dev/null
+
+      - name: mac, both architectures
+        if: runner.os == 'macOS'
+        run: |
+          node scripts/sea.mjs build/arm64/svietlik
+          ./build/arm64/svietlik shows > /dev/null
+          v=$(node -p process.version)
+          curl -fsSL "https://nodejs.org/dist/$v/node-$v-darwin-x64.tar.gz" | tar -xz -C build
+          node scripts/sea.mjs build/x64/svietlik "build/node-$v-darwin-x64/bin/node"
+          mkdir -p dist-app
+          # zip keeps the executable bit, a bare download loses it
+          (cd build/arm64 && zip -q ../../dist-app/svietlik-mac-apple-silicon.zip svietlik)
+          (cd build/x64 && zip -q ../../dist-app/svietlik-mac-intel.zip svietlik)
+
+      - name: linux
+        if: runner.os == 'Linux'
+        run: |
+          node scripts/sea.mjs build/linux/svietlik
+          ./build/linux/svietlik shows > /dev/null
+          mkdir -p dist-app
+          tar -czf dist-app/svietlik-linux-x64.tar.gz -C build/linux svietlik
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ runner.os }}
+          path: dist-app/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes "Download the file for your computer, plug in the car and double click it. Steps: https://github.com/$GITHUB_REPOSITORY#scan-your-car-no-coding"

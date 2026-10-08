@@ -12,3 +12,5 @@ dist/
 # scan reports contain the VIN
 report*.json
 svietlik-report-*.json
+build/
+dist-app/
